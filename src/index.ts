@@ -9,24 +9,34 @@ interface Env {
   CF_PURGE_API_TOKEN?: string;
   CF_PURGE_ZONE_ID?: string;
   CF_PURGE_BASE_URL?: string;
+  CORS_ALLOWED_ORIGINS?: string;
 }
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    const corsOrigin = resolveCorsOrigin(request, env);
+
+    if (request.method === "OPTIONS") {
+      return corsPreflight(request, corsOrigin);
+    }
+
     if (request.method !== "GET" && request.method !== "HEAD") {
-      return new Response("Method not allowed", {
-        status: 405,
-        headers: { Allow: "GET, HEAD" }
-      });
+      return withCors(
+        new Response("Method not allowed", {
+          status: 405,
+          headers: { Allow: "GET, HEAD, OPTIONS" }
+        }),
+        corsOrigin
+      );
     }
 
     if (isWellKnownRequest(request.url)) {
-      return new Response(null, { status: 204 });
+      return withCors(new Response(null, { status: 204 }), corsOrigin);
     }
 
     const key = getObjectKey(request.url);
     if (!key) {
-      return notFound();
+      return withCors(notFound(), corsOrigin);
     }
 
     devLog("object sync", {
@@ -43,7 +53,7 @@ export default {
           upstreamStatus: upstreamResponse.status,
           status: 404
         });
-        return notFound();
+        return withCors(notFound(), corsOrigin);
       }
 
       console.error("object sync", {
@@ -52,7 +62,7 @@ export default {
         upstreamStatus: upstreamResponse.status,
         status: 502
       });
-      return new Response("Upstream storage error", { status: 502 });
+      return withCors(new Response("Upstream storage error", { status: 502 }), corsOrigin);
     }
 
     try {
@@ -64,10 +74,10 @@ export default {
         upstreamStatus: upstreamResponse.status,
         status: 200
       });
-      return ok();
+      return withCors(ok(), corsOrigin);
     } catch (error) {
       console.error("Failed to sync object to R2 or purge cache", { key, error });
-      return new Response("Sync failed", { status: 502 });
+      return withCors(new Response("Sync failed", { status: 502 }), corsOrigin);
     }
   }
 };
@@ -203,4 +213,88 @@ function getPurgeUrl(requestUrl: string, env: Env): string {
   }
 
   return requestUrl;
+}
+
+function parseAllowedOrigins(value: string | undefined): string[] | null {
+  if (!value) {
+    return null;
+  }
+
+  const origins = value
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
+  return origins.length > 0 ? origins : null;
+}
+
+function resolveCorsOrigin(request: Request, env: Env): string | null {
+  const allowedOrigins = parseAllowedOrigins(env.CORS_ALLOWED_ORIGINS);
+  if (!allowedOrigins) {
+    return null;
+  }
+
+  const origin = request.headers.get("Origin");
+  if (!origin) {
+    return null;
+  }
+
+  if (allowedOrigins.includes("*") || allowedOrigins.includes(origin)) {
+    return origin;
+  }
+
+  return null;
+}
+
+function applyCorsHeaders(headers: Headers, corsOrigin: string): void {
+  headers.set("Access-Control-Allow-Origin", corsOrigin);
+  headers.set("Access-Control-Allow-Credentials", "true");
+  headers.set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+  appendVary(headers, "Origin");
+}
+
+function corsPreflight(request: Request, corsOrigin: string | null): Response {
+  if (!corsOrigin) {
+    return new Response(null, { status: 405 });
+  }
+
+  const headers = new Headers({
+    "Access-Control-Max-Age": "86400"
+  });
+  applyCorsHeaders(headers, corsOrigin);
+
+  const requestHeaders = request.headers.get("Access-Control-Request-Headers");
+  if (requestHeaders) {
+    headers.set("Access-Control-Allow-Headers", requestHeaders);
+  }
+
+  return new Response(null, { status: 204, headers });
+}
+
+function withCors(response: Response, corsOrigin: string | null): Response {
+  if (!corsOrigin) {
+    return response;
+  }
+
+  const headers = new Headers(response.headers);
+  applyCorsHeaders(headers, corsOrigin);
+
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers
+  });
+}
+
+function appendVary(headers: Headers, value: string): void {
+  const existing = headers.get("Vary");
+  if (!existing) {
+    headers.set("Vary", value);
+    return;
+  }
+
+  const values = existing.split(",").map((entry) => entry.trim());
+  if (!values.includes(value)) {
+    headers.set("Vary", `${existing}, ${value}`);
+  }
 }
