@@ -1,0 +1,10 @@
+name = "parco-sync"
+main = "src/index.ts"
+compatibility_date = "2026-06-16"
+
+[define]
+__DEV__ = "false"
+
+[[r2_buckets]]
+binding = "OBJECT_BUCKET"
+bucket_name = "parco"

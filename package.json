@@ -1,0 +1,16 @@
+{
+  "name": "parco-sync",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --define __DEV__:true",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260614.0",
+    "typescript": "^5.8.3",
+    "wrangler": "^4.20.3"
+  }
+}
